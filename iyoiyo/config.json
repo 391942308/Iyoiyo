@@ -1,0 +1,14 @@
+{
+    "allow_admin_access": true,
+    "admin_page": "iyo/iyo.php",
+    "tips": "allow_admin_access设置开启时才可以访问配置页面。   开启：true|关闭：fasle；   admin_page是配置页面的路径",
+    "ai": {
+        "enabled": true,
+        "provider": "ollama",
+        "api_key": "",
+        "base_url": "http:\/\/127.0.0.1:11434",
+        "model": "deepseek-r1:8b",
+        "embedding_model": "text-embedding-ada-002",
+        "local_knowledge_path": "data\/knowledge\/"
+    }
+}

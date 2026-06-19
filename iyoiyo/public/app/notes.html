@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的手札 - IYOIYO</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <link rel="stylesheet" href="/assets/css/easymde/easymde.min.css">
+    <!-- <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css" onerror="this.onerror=null;this.href='/assets/css/easymde/easymde.min.css'"> -->
+</head>
+<body>
+    <div id="navContainer"></div>
+    <div class="container">
+        <main class="notes-layout">
+            <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
+            <aside class="notes-sidebar" id="notesSidebar">
+                <input type="text" id="searchNotes" placeholder="搜索笔记..." oninput="searchNotes()">
+                <h3>分类</h3>
+                <!-- 分类列表容器（限高滚动） -->
+                <div class="category-list-wrapper">
+                    <ul id="categoryList"><li class="active" data-category="全部">全部</li></ul>
+                </div>
+                <div class="category-actions">
+                    <button onclick="showAddCategoryDialog()">+ 新建</button>
+                    <button onclick="editCategoryAction()" id="editCategoryBtn" disabled>✎ 编辑</button>
+                    <button onclick="deleteCategoryAction()" id="deleteCategoryBtn" disabled>🗑 删除</button>
+                </div>
+                <hr>
+                <h3>笔记列表</h3>
+                <ul id="noteList"></ul>
+                <button onclick="newNote()">+ 新建笔记</button>
+            </aside>
+            <section class="notes-editor">
+                <div id="editorEmpty" class="empty-hint">选择或创建一篇笔记</div>
+                <div id="editorArea" style="display:none;">
+                    <input type="text" id="noteTitle" placeholder="笔记标题">
+                    <textarea id="noteContent"></textarea>
+                    <div class="editor-actions">
+                        <select id="noteCategory"></select>
+                        <button onclick="saveNote()">💾 保存</button>
+                        <button onclick="deleteNote()" class="danger">🗑 删除</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js" onerror="loadLocalEasyMDE()"></script> -->
+    <script src="/assets/js/easymde/easymde.min.js"></script>
+    <script>
+        // EasyMDE 降级
+        let easyMDELoaded = typeof EasyMDE !== 'undefined';
+        function loadLocalEasyMDE() {
+            if (easyMDELoaded) return;
+            const script = document.createElement('script');
+            script.src = '/assets/js/easymde/easymde.min.js';
+            script.onload = () => { easyMDELoaded = true; };
+            script.onerror = () => { console.warn('EasyMDE 不可用，使用纯文本模式'); };
+            document.head.appendChild(script);
+        }
+        if (!easyMDELoaded) loadLocalEasyMDE();
+
+        // ========== 导航加载 ==========
+        function loadNav() {
+            return fetch('/components/nav.html').then(r => r.text()).then(html => {
+                const container = document.getElementById('navContainer');
+                container.innerHTML = html;
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    newScript.text = oldScript.text;
+                    document.body.appendChild(newScript);
+                    oldScript.remove();
+                });
+            });
+        }
+
+        // ========== 背景与主题应用 ==========
+        async function applySpaceBackground() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const res = await fetch('/api/config/settings', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            const json = await res.json();
+            if (json.success) {
+                const settings = json.settings || {};
+                const user = json.user || {};
+                const html = document.documentElement;
+                if (settings.bg_space) {
+                    const img = new Image();
+                    img.onload = () => {
+                        html.style.backgroundImage = `url('${settings.bg_space}')`;
+                        html.style.backgroundSize = 'cover';
+                        html.style.backgroundPosition = 'center';
+                        html.style.backgroundAttachment = 'fixed';
+                    };
+                    img.src = settings.bg_space;
+                } else {
+                    html.style.backgroundImage = '';
+                    html.style.background = '#000000';
+                }
+                html.setAttribute('data-theme', user.theme || 'light');
+            }
+        }
+
+        // ========== 侧边栏折叠（移动端） ==========
+        function toggleSidebar() {
+            const sidebar = document.getElementById('notesSidebar');
+            sidebar.classList.toggle('collapsed');
+        }
+
+        // ========== 笔记全局变量 ==========
+        let token = localStorage.getItem('token');
+        if (!token) { location.href = '/'; }
+
+        let easyMDE = null;
+        let currentNoteId = null;
+        let allNotes = [];
+        let categories = ['未分类'];
+        let selectedCategory = '全部';
+
+        // ========== 初始化 ==========
+        loadNav().then(() => {
+            applySpaceBackground();
+            fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } })
+                .then(res => {
+                    if (res.status === 401) { localStorage.clear(); location.href = '/'; }
+                    else {
+                        loadCategories();
+                        loadNotes();
+                    }
+                });
+        });
+
+        // ========== 笔记数据加载 ==========
+        async function loadNotes() {
+            const res = await fetch('/api/notes', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) {
+                allNotes = json.data;
+                applyFilterAndSearch();
+            }
+        }
+
+        async function loadCategories() {
+            const res = await fetch('/api/notes/categories', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) {
+                categories = json.data.length > 0 ? json.data : ['未分类'];
+                renderCategories();
+            }
+        }
+
+        // ========== 分类渲染（列表） ==========
+        function renderCategories() {
+            const ul = document.getElementById('categoryList');
+            ul.innerHTML = '';
+            const allLi = document.createElement('li');
+            allLi.textContent = '全部';
+            allLi.dataset.category = '全部';
+            if (selectedCategory === '全部') allLi.classList.add('active');
+            allLi.onclick = () => {
+                selectedCategory = '全部';
+                renderCategories();
+                applyFilterAndSearch();
+                document.getElementById('editCategoryBtn').disabled = true;
+                document.getElementById('deleteCategoryBtn').disabled = true;
+            };
+            ul.appendChild(allLi);
+            categories.forEach(cat => {
+                const li = document.createElement('li');
+                li.textContent = cat;
+                li.dataset.category = cat;
+                if (cat === selectedCategory) li.classList.add('active');
+                li.onclick = () => {
+                    selectedCategory = cat;
+                    renderCategories();
+                    applyFilterAndSearch();
+                    document.getElementById('editCategoryBtn').disabled = false;
+                    document.getElementById('deleteCategoryBtn').disabled = false;
+                };
+                ul.appendChild(li);
+            });
+        }
+
+        // ========== 搜索与筛选 ==========
+        function searchNotes() {
+            applyFilterAndSearch();
+        }
+
+        function applyFilterAndSearch() {
+            const keyword = document.getElementById('searchNotes').value.toLowerCase();
+            let filtered = allNotes;
+            if (selectedCategory !== '全部') {
+                filtered = filtered.filter(n => n.category_name === selectedCategory);
+            }
+            if (keyword) {
+                filtered = filtered.filter(n =>
+                    (n.title && n.title.toLowerCase().includes(keyword)) ||
+                    (n.content && n.content.toLowerCase().includes(keyword))
+                );
+            }
+            renderNoteList(filtered);
+        }
+
+        function renderNoteList(notes) {
+            const ul = document.getElementById('noteList');
+            ul.innerHTML = '';
+            notes.forEach(n => {
+                const li = document.createElement('li');
+                li.dataset.id = n.id;
+                if (n.id === currentNoteId) li.classList.add('active');
+                const titleSpan = document.createElement('span');
+                titleSpan.textContent = n.title || '无标题';
+                const dateSpan = document.createElement('span');
+                dateSpan.className = 'note-date';
+                dateSpan.textContent = (n.updated_at || n.created_at || '').substr(0, 10);
+                li.appendChild(titleSpan);
+                li.appendChild(dateSpan);
+                li.onclick = () => openNote(n.id);
+                ul.appendChild(li);
+            });
+        }
+
+        // ========== 打开/新建笔记 ==========
+        function openNote(id) {
+            const note = allNotes.find(n => n.id == id);
+            if (!note) return;
+            currentNoteId = note.id;
+            document.getElementById('editorEmpty').style.display = 'none';
+            document.getElementById('editorArea').style.display = 'block';
+            document.getElementById('noteTitle').value = note.title || '';
+            const textarea = document.getElementById('noteContent');
+            if (easyMDELoaded && typeof EasyMDE !== 'undefined') {
+                if (!easyMDE) {
+                    easyMDE = new EasyMDE({ element: textarea, spellChecker: false, status: false });
+                }
+                easyMDE.value(note.content || '');
+            } else {
+                textarea.value = note.content || '';
+                textarea.style.display = 'block';
+            }
+            const catSelect = document.getElementById('noteCategory');
+            catSelect.innerHTML = '';
+            categories.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c;
+                opt.textContent = c;
+                if (c === note.category_name) opt.selected = true;
+                catSelect.appendChild(opt);
+            });
+            applyFilterAndSearch();
+        }
+
+        function newNote() {
+            currentNoteId = null;
+            document.getElementById('editorEmpty').style.display = 'none';
+            document.getElementById('editorArea').style.display = 'block';
+            document.getElementById('noteTitle').value = '新笔记';
+            const textarea = document.getElementById('noteContent');
+            if (easyMDELoaded && typeof EasyMDE !== 'undefined') {
+                if (!easyMDE) {
+                    easyMDE = new EasyMDE({ element: textarea, spellChecker: false, status: false });
+                }
+                easyMDE.value('');
+            } else {
+                textarea.value = '';
+                textarea.style.display = 'block';
+            }
+            const catSelect = document.getElementById('noteCategory');
+            catSelect.innerHTML = '';
+            categories.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c;
+                opt.textContent = c;
+                if (c === selectedCategory && selectedCategory !== '全部') opt.selected = true;
+                else if (c === '未分类') opt.selected = true;
+                catSelect.appendChild(opt);
+            });
+            document.getElementById('noteTitle').focus();
+        }
+
+        // ========== 保存笔记 ==========
+        async function saveNote() {
+            const title = document.getElementById('noteTitle').value.trim();
+            if (!title) { alert('标题不能为空'); return; }
+            const content = easyMDE ? easyMDE.value() : document.getElementById('noteContent').value;
+            const category = document.getElementById('noteCategory').value || '未分类';
+            const url = currentNoteId ? '/api/notes/update' : '/api/notes';
+            const method = currentNoteId ? 'PUT' : 'POST';
+            const body = currentNoteId
+                ? { id: currentNoteId, title, content, category_name: category }
+                : { title, content, category_name: category };
+            const res = await fetch(url, {
+                method,
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const json = await res.json();
+            if (json.success) {
+                await loadCategories();
+                await loadNotes();
+                if (json.id) openNote(json.id);
+                else if (currentNoteId) openNote(currentNoteId);
+            } else alert('保存失败: ' + (json.error || ''));
+        }
+
+        // ========== 删除笔记 ==========
+        async function deleteNote() {
+            if (!currentNoteId) return;
+            if (!confirm('确定删除？')) return;
+            await fetch('/api/notes/delete', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: currentNoteId })
+            });
+            currentNoteId = null;
+            document.getElementById('editorArea').style.display = 'none';
+            document.getElementById('editorEmpty').style.display = 'block';
+            await loadCategories();
+            await loadNotes();
+        }
+
+        // ========== 分类管理 ==========
+        function showAddCategoryDialog() {
+            const name = prompt('输入新分类名');
+            if (name) addCategory(name);
+        }
+
+        async function addCategory(name) {
+            await fetch('/api/notes/categories', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ categories: [...categories, name] })
+            });
+            await loadCategories();
+        }
+
+        async function editCategoryAction() {
+            if (selectedCategory === '全部') return;
+            const newName = prompt('重命名分类', selectedCategory);
+            if (newName && newName !== selectedCategory && !categories.includes(newName)) {
+                const updates = allNotes.filter(n => n.category_name === selectedCategory);
+                await Promise.all(updates.map(n => fetch('/api/notes/update', {
+                    method: 'PUT',
+                    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: n.id, category_name: newName })
+                })));
+                const idx = categories.indexOf(selectedCategory);
+                if (idx !== -1) categories[idx] = newName;
+                selectedCategory = newName;
+                await saveCategoriesToServer();
+                await loadNotes();
+            }
+        }
+
+        async function deleteCategoryAction() {
+            if (selectedCategory === '全部') return;
+            if (!confirm(`删除分类“${selectedCategory}”及其所有笔记？`)) return;
+            const notesInCat = allNotes.filter(n => n.category_name === selectedCategory);
+            await Promise.all(notesInCat.map(n => fetch('/api/notes/delete', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: n.id })
+            })));
+            categories = categories.filter(c => c !== selectedCategory);
+            selectedCategory = '全部';
+            await saveCategoriesToServer();
+            await loadNotes();
+        }
+
+        async function saveCategoriesToServer() {
+            await fetch('/api/notes/categories', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ categories: categories })
+            });
+        }
+
+        // ========== 键盘快捷键 ==========
+        document.addEventListener('keydown', e => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                if (document.getElementById('editorArea').style.display !== 'none') saveNote();
+            }
+        });
+    </script>
+</body>
+</html>

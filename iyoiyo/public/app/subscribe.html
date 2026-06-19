@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的订阅 - IYOIYO</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <style type="text/css">
+        [data-theme="dark"] select option{color: #000;}
+    </style>
+</head>
+<body>
+    <div id="navContainer"></div>
+    <div class="container">
+        <main class="subscribe-page">
+            <h1>📺 我的订阅</h1>
+
+            <div class="action-bar">
+                <button class="btn-outline" onclick="showCategoryManage()">📁 管理分类</button>
+                <button class="btn-outline" onclick="showTagManage()">🏷️ 管理标签</button>
+                <button class="btn" onclick="showAddItemForm()">＋ 添加作品</button>
+            </div>
+
+            <div class="mode-switch">
+                <button id="modeCategoryBtn" class="mode-btn active" onclick="switchMode('category')">📚 按分类浏览</button>
+                <button id="modeTagBtn" class="mode-btn" onclick="switchMode('tag')">🏷️ 标签检索</button>
+            </div>
+
+            <div id="categoryCloud" class="cloud"></div>
+            <div id="tagCloud" class="cloud" style="display:none;"></div>
+
+            <div class="book-home-time-list">
+                <div class="list-item">
+                    <ul id="itemsContainer" class="book-list">
+                        <li class="empty-hint">请选择一个分类或标签查看作品</li>
+                    </ul>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 分类管理弹窗 -->
+    <div class="modal" id="categoryManageModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('categoryManageModal')">&times;</span>
+            <h2>管理分类</h2>
+            <div id="categoriesList" class="cat-manage-list"></div>
+            <div class="cat-add-row">
+                <input type="text" id="newCategoryName" placeholder="新分类名称">
+                <button onclick="addCategoryFromManage()">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 标签管理弹窗 -->
+    <div class="modal" id="tagManageModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('tagManageModal')">&times;</span>
+            <h2>管理标签</h2>
+            <div id="tagsList" class="cat-manage-list"></div>
+            <div class="cat-add-row">
+                <input type="text" id="newTagName" placeholder="新标签名称">
+                <button onclick="addTagFromManage()">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 作品弹窗 -->
+    <div class="modal" id="itemModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('itemModal')">&times;</span>
+            <h2 id="itemModalTitle">添加作品</h2>
+            <form id="itemForm">
+                <div class="form-group">
+                    <label>分类 *</label>
+                    <select id="itemCategoryId" required></select>
+                </div>
+                <div class="form-group">
+                    <label>标签（可多选）</label>
+                    <div id="tagCheckboxes"></div>
+                </div>
+                <div class="form-group">
+                    <label>名称 *</label>
+                    <input type="text" id="itemTitle" required>
+                </div>
+                <div class="form-group">
+                    <label>链接地址</label>
+                    <input type="url" id="itemUrl">
+                </div>
+                <div class="form-group">
+                    <label>进度</label>
+                    <input type="text" id="itemProgress" placeholder="如：完 / 12 / 第3集">
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <textarea id="itemNotes" rows="2"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>封面图</label>
+                    <input type="text" id="itemCover" placeholder="图片URL">
+                    <input type="file" id="coverFileInput" accept="image/*" style="display:none" onchange="uploadCoverFile()">
+                    <button type="button" class="upload-btn" onclick="document.getElementById('coverFileInput').click()">📤 上传封面</button>
+                    <img id="coverPreviewImg" class="cover-preview" style="display:none;">
+                </div>
+                <input type="hidden" id="itemId">
+                <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                    <button type="button" class="btn-outline" onclick="closeModal('itemModal')">取消</button>
+                    <button type="submit" class="btn">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 作品详情弹窗 -->
+    <div class="modal" id="bookDetailModal">
+        <div class="modal-content" style="max-width:500px">
+            <span class="close" onclick="closeModal('bookDetailModal')">&times;</span>
+            <div id="detailCoverArea"></div>
+            <div style="padding:1rem;">
+                <h2 id="detailTitle"></h2>
+                <div id="detailProgress" style="color:var(--primary); margin:0.5rem 0;"></div>
+                <div id="detailTags" style="display:flex; flex-wrap:wrap; gap:0.3rem; margin:0.5rem 0;"></div>
+                <div id="detailNotes" style="color:#ccc; margin:0.5rem 0;"></div>
+                <div id="detailUrl" style="margin:0.5rem 0;"></div>
+                <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+                    <button id="detailEditBtn" class="btn">✎ 编辑</button>
+                    <button id="detailDeleteBtn" class="btn-outline" style="border-color:#e53e3e; color:#e53e3e;">🗑 删除</button>
+                    <button class="btn-outline" onclick="closeModal('bookDetailModal')">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ========== 导航加载 ==========
+        function loadNav() {
+            return fetch('/components/nav.html').then(r => r.text()).then(html => {
+                const container = document.getElementById('navContainer');
+                container.innerHTML = html;
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    newScript.text = oldScript.text;
+                    document.body.appendChild(newScript);
+                    oldScript.remove();
+                });
+            });
+        }
+
+        // ========== 背景与主题 ==========
+        async function applySpaceBackground() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const res = await fetch('/api/config/settings', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) {
+                const settings = json.settings || {};
+                const user = json.user || {};
+                const html = document.documentElement;
+                if (settings.bg_space) {
+                    html.style.backgroundImage = `url('${settings.bg_space}')`;
+                    html.style.backgroundSize = 'cover';
+                    html.style.backgroundPosition = 'center';
+                    html.style.backgroundAttachment = 'fixed';
+                } else {
+                    html.style.backgroundImage = '';
+                    html.style.background = '#000000';
+                }
+                html.setAttribute('data-theme', user.theme || 'light');
+            }
+        }
+
+        let token = localStorage.getItem('token');
+        if (!token) { location.href = '/'; }
+
+        let currentMode = 'category';
+        let currentCategoryId = 0; // 0 代表“全部”
+        let currentTagId = 0;
+        let categoriesData = [];
+        let tagsData = [];
+
+        // ========== API 封装 ==========
+        async function api(url, options = {}) {
+            const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+            const res = await fetch(url, { headers, ...options });
+            const text = await res.text();
+            try {
+                return JSON.parse(text);
+            } catch (e) {
+                throw new Error('服务器返回异常: ' + text.substring(0, 100));
+            }
+        }
+
+        // ========== 初始化数据 ==========
+        async function loadInitialData() {
+            const [catRes, tagRes] = await Promise.all([
+                api('/api/subscribe/categories'),
+                api('/api/subscribe/tags')
+            ]);
+            if (catRes.success) categoriesData = catRes.data;
+            if (tagRes.success) tagsData = tagRes.data;
+            renderClouds();
+            // 默认显示全部作品
+            filterAll();
+        }
+
+        function renderClouds() {
+            // 分类云：第一个是“全部”
+            let catHtml = `<span class="cloud-item ${currentCategoryId === 0 ? 'active' : ''}" data-category-id="0" onclick="filterAll()">全部</span>`;
+            catHtml += categoriesData.map(cat => `<span class="cloud-item ${cat.id === currentCategoryId ? 'active' : ''}" data-category-id="${cat.id}" onclick="filterByCategory(${cat.id})">${escapeHtml(cat.name)}</span>`).join('');
+            document.getElementById('categoryCloud').innerHTML = catHtml;
+
+            // 标签云：第一个是“全部”
+            let tagHtml = '<span class="cloud-item active" data-tag-id="0" onclick="filterByTag(0)">全部</span>';
+            tagHtml += tagsData.map(tag => `<span class="cloud-item" data-tag-id="${tag.id}" onclick="filterByTag(${tag.id})">${escapeHtml(tag.name)}</span>`).join('');
+            document.getElementById('tagCloud').innerHTML = tagHtml;
+        }
+
+        function switchMode(mode) {
+            currentMode = mode;
+            document.getElementById('modeCategoryBtn').classList.toggle('active', mode === 'category');
+            document.getElementById('modeTagBtn').classList.toggle('active', mode === 'tag');
+            document.getElementById('categoryCloud').style.display = mode === 'category' ? 'flex' : 'none';
+            document.getElementById('tagCloud').style.display = mode === 'tag' ? 'flex' : 'none';
+            if (mode === 'category') {
+                if (currentCategoryId === 0) filterAll();
+                else filterByCategory(currentCategoryId);
+            } else {
+                filterByTag(currentTagId);
+            }
+        }
+
+        // 显示全部作品
+        async function filterAll() {
+            if (currentMode !== 'category') return;
+            currentCategoryId = 0;
+            document.querySelectorAll('#categoryCloud .cloud-item').forEach(el => el.classList.remove('active'));
+            document.querySelector('#categoryCloud .cloud-item[data-category-id="0"]')?.classList.add('active');
+            const res = await api('/api/subscribe/items');
+            renderItems(res.data || []);
+        }
+
+        async function filterByCategory(id) {
+            if (currentMode !== 'category') return;
+            currentCategoryId = id;
+            document.querySelectorAll('#categoryCloud .cloud-item').forEach(el => el.classList.remove('active'));
+            document.querySelector(`#categoryCloud .cloud-item[data-category-id="${id}"]`)?.classList.add('active');
+            const res = await api(`/api/subscribe/items?category_id=${id}`);
+            renderItems(res.data || []);
+        }
+
+        async function filterByTag(id) {
+            if (currentMode !== 'tag') return;
+            currentTagId = id;
+            document.querySelectorAll('#tagCloud .cloud-item').forEach(el => el.classList.remove('active'));
+            document.querySelector(`#tagCloud .cloud-item[data-tag-id="${id}"]`)?.classList.add('active');
+            const url = id == 0 ? '/api/subscribe/items' : `/api/subscribe/items?tag_id=${id}`;
+            const res = await api(url);
+            renderItems(res.data || []);
+        }
+
+        function renderItems(items) {
+            const container = document.getElementById('itemsContainer');
+            if (!items || items.length === 0) {
+                container.innerHTML = '<li class="empty-hint">暂无作品</li>';
+                return;
+            }
+            container.innerHTML = items.map(item => renderBookItemHTML(item)).join('');
+        }
+
+        function renderBookItemHTML(item) {
+            const colorClass = 'book-color-' + ((item.id % 7) + 1);
+            const coverStyle = item.cover ? `background-image: url('${item.cover}');` : '';
+            return `
+                <li class="book-item" data-id="${item.id}" onclick="showBookDetail(${item.id})">
+                    <div class="book-cover ${colorClass}">
+                        <div class="book-cover-image" style="${coverStyle}"></div>
+                        <div class="title-container">
+                            <div class="title">${escapeHtml(item.title)}</div>
+                        </div>
+                        <div class="read-type">${escapeHtml(item.progress || '')}</div>
+                    </div>
+                </li>`;
+        }
+
+        async function deleteItem(id) {
+            if (!confirm('确定删除此作品吗？此操作不可撤销。')) return;
+            try {
+                const res = await api('/api/subscribe/items/delete', {
+                    method: 'DELETE',
+                    body: JSON.stringify({ id })
+                });
+                if (res.success) {
+                    closeModal('bookDetailModal');
+                    if (currentMode === 'category') {
+                        currentCategoryId === 0 ? filterAll() : filterByCategory(currentCategoryId);
+                    } else {
+                        filterByTag(currentTagId);
+                    }
+                } else {
+                    alert('删除失败: ' + (res.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('请求失败: ' + e.message);
+            }
+        }
+
+        async function showBookDetail(id) {
+            const res = await api(`/api/subscribe/items/detail?id=${id}`);
+            if (!res.success) return;
+            const item = res.data;
+            document.getElementById('detailTitle').innerText = item.title;
+            document.getElementById('detailProgress').innerHTML = item.progress ? `📖 ${escapeHtml(item.progress)}` : '';
+            document.getElementById('detailNotes').innerHTML = item.notes ? `📝 ${escapeHtml(item.notes)}` : '';
+            document.getElementById('detailUrl').innerHTML = item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" style="color:var(--primary)">🔗 访问链接</a>` : '';
+            let tagHtml = '';
+            if (item.tags) {
+                tagHtml = item.tags.map(t => `<span style="background:rgba(255,255,255,0.15); padding:0.2rem 0.6rem; border-radius:10px; font-size:0.8rem;">🏷️ ${escapeHtml(t.name)}</span>`).join('');
+            }
+            document.getElementById('detailTags').innerHTML = tagHtml;
+            const coverArea = document.getElementById('detailCoverArea');
+            if (item.cover) {
+                coverArea.innerHTML = `<img src="${item.cover}" style="width:100%; max-height:200px; object-fit:cover; border-radius:8px 8px 0 0;" onerror="this.style.display='none'">`;
+            } else {
+                coverArea.innerHTML = `<div style="height:120px; background:linear-gradient(135deg, #c2a575, #a57c4a); display:flex; align-items:center; justify-content:center; color:#fff; border-radius:8px 8px 0 0;">${escapeHtml(item.title)}</div>`;
+            }
+            document.getElementById('detailEditBtn').onclick = () => { closeModal('bookDetailModal'); editItem(id); };
+            document.getElementById('detailDeleteBtn').onclick = () => { deleteItem(id); };
+            document.getElementById('bookDetailModal').style.display = 'flex';
+            applyDarkModal('bookDetailModal');
+        }
+
+        // ==================== 分类管理（保持不变） ====================
+        async function showCategoryManage() {
+            await refreshCategoriesList();
+            document.getElementById('categoryManageModal').style.display = 'flex';
+            applyDarkModal('categoryManageModal');
+        }
+
+        async function refreshCategoriesList() {
+            const res = await api('/api/subscribe/categories');
+            if (res.success) {
+                categoriesData = res.data;
+                let html = categoriesData.map(cat => `
+                    <div class="cat-item">
+                        <span>${escapeHtml(cat.name)}</span>
+                        <div class="cat-item-actions">
+                            <button class="btn-sm" onclick="editCategory(${cat.id}, '${escapeHtml(cat.name)}')">✎</button>
+                            <button class="btn-sm danger" onclick="deleteCategory(${cat.id})">✕</button>
+                        </div>
+                    </div>`).join('');
+                document.getElementById('categoriesList').innerHTML = html;
+            }
+        }
+
+        async function addCategoryFromManage() {
+            const name = document.getElementById('newCategoryName').value.trim();
+            if (!name) return alert('请输入分类名');
+            const res = await api('/api/subscribe/categories', { method: 'POST', body: JSON.stringify({ name }) });
+            if (res.success) {
+                document.getElementById('newCategoryName').value = '';
+                await refreshCategoriesList();
+                renderClouds();
+            } else alert(res.error);
+        }
+
+        async function editCategory(id, oldName) {
+            const newName = prompt('编辑分类名称', oldName);
+            if (newName && newName !== oldName) {
+                const res = await api('/api/subscribe/categories', { method: 'PUT', body: JSON.stringify({ id, name: newName }) });
+                if (res.success) {
+                    await refreshCategoriesList();
+                    renderClouds();
+                } else alert(res.error);
+            }
+        }
+
+        async function deleteCategory(id) {
+            if (!confirm('确定删除此分类及其下所有作品？')) return;
+            const res = await api('/api/subscribe/categories', { method: 'DELETE', body: JSON.stringify({ id }) });
+            if (res.success) {
+                if (currentCategoryId == id) currentCategoryId = 0;
+                await refreshCategoriesList();
+                renderClouds();
+                currentCategoryId === 0 ? filterAll() : filterByCategory(currentCategoryId);
+            } else alert(res.error);
+        }
+
+        // ==================== 标签管理（保持不变） ====================
+        async function showTagManage() {
+            await refreshTagsList();
+            document.getElementById('tagManageModal').style.display = 'flex';
+            applyDarkModal('tagManageModal');
+        }
+
+        async function refreshTagsList() {
+            const res = await api('/api/subscribe/tags');
+            if (res.success) {
+                tagsData = res.data;
+                let html = tagsData.map(tag => `
+                    <div class="cat-item">
+                        <span>${escapeHtml(tag.name)}</span>
+                        <div class="cat-item-actions">
+                            <button class="btn-sm" onclick="editTag(${tag.id}, '${escapeHtml(tag.name)}')">✎</button>
+                            <button class="btn-sm danger" onclick="deleteTag(${tag.id})">✕</button>
+                        </div>
+                    </div>`).join('');
+                document.getElementById('tagsList').innerHTML = html;
+            }
+        }
+
+        async function addTagFromManage() {
+            const name = document.getElementById('newTagName').value.trim();
+            if (!name) return alert('请输入标签名');
+            const res = await api('/api/subscribe/tags', { method: 'POST', body: JSON.stringify({ name }) });
+            if (res.success) {
+                document.getElementById('newTagName').value = '';
+                await refreshTagsList();
+                renderClouds();
+            } else alert(res.error);
+        }
+
+        async function editTag(id, oldName) {
+            const newName = prompt('编辑标签名称', oldName);
+            if (newName && newName !== oldName) {
+                const res = await api('/api/subscribe/tags', { method: 'PUT', body: JSON.stringify({ id, name: newName }) });
+                if (res.success) {
+                    await refreshTagsList();
+                    renderClouds();
+                } else alert(res.error);
+            }
+        }
+
+        async function deleteTag(id) {
+            if (!confirm('确定删除此标签？相关作品的标签关联也会被移除。')) return;
+            const res = await api('/api/subscribe/tags', { method: 'DELETE', body: JSON.stringify({ id }) });
+            if (res.success) {
+                await refreshTagsList();
+                renderClouds();
+            } else alert(res.error);
+        }
+
+        // ==================== 作品管理（保持不变） ====================
+        async function showAddItemForm() {
+            document.getElementById('itemModalTitle').innerText = '添加作品';
+            document.getElementById('itemId').value = '';
+            document.getElementById('itemTitle').value = '';
+            document.getElementById('itemUrl').value = '';
+            document.getElementById('itemProgress').value = '';
+            document.getElementById('itemNotes').value = '';
+            document.getElementById('itemCover').value = '';
+            document.getElementById('coverPreviewImg').style.display = 'none';
+            await loadCategorySelect();
+            await loadTagCheckboxes();
+            document.getElementById('itemModal').style.display = 'flex';
+            applyDarkModal('itemModal');
+        }
+
+        async function editItem(id) {
+            try {
+                const res = await api(`/api/subscribe/items/detail?id=${id}`);
+                if (!res.success) {
+                    alert('获取作品信息失败');
+                    return;
+                }
+                const item = res.data;
+                document.getElementById('itemModalTitle').innerText = '编辑作品';
+                document.getElementById('itemId').value = item.id;
+                document.getElementById('itemTitle').value = item.title || '';
+                document.getElementById('itemUrl').value = item.url || '';
+                document.getElementById('itemProgress').value = item.progress || '';
+                document.getElementById('itemNotes').value = item.notes || '';
+                document.getElementById('itemCover').value = item.cover || '';
+                if (item.cover) {
+                    document.getElementById('coverPreviewImg').src = item.cover;
+                    document.getElementById('coverPreviewImg').style.display = 'block';
+                } else {
+                    document.getElementById('coverPreviewImg').style.display = 'none';
+                }
+                await loadCategorySelect(item.category_id);
+                const selectedTagIds = (item.tags && Array.isArray(item.tags)) ? item.tags.map(t => t.id) : [];
+                await loadTagCheckboxes(selectedTagIds);
+                document.getElementById('itemModal').style.display = 'flex';
+                applyDarkModal('itemModal');
+            } catch (e) {
+                alert('编辑功能异常: ' + e.message);
+            }
+        }
+
+        async function loadCategorySelect(selectedId) {
+            const res = await api('/api/subscribe/categories');
+            if (res.success) {
+                const select = document.getElementById('itemCategoryId');
+                select.innerHTML = res.data.map(c => `<option value="${c.id}" ${c.id == selectedId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+            }
+        }
+
+        async function loadTagCheckboxes(selectedIds = []) {
+            const res = await api('/api/subscribe/tags');
+            if (res.success) {
+                const container = document.getElementById('tagCheckboxes');
+                container.innerHTML = res.data.map(tag => `
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="${tag.id}" ${selectedIds.includes(tag.id) ? 'checked' : ''}> ${escapeHtml(tag.name)}
+                    </label>`).join('');
+            }
+        }
+
+        async function uploadCoverFile() {
+            const fileInput = document.getElementById('coverFileInput');
+            const file = fileInput.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('cover', file);
+            try {
+                const res = await fetch('/api/subscribe/upload-cover', {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + token },
+                    body: formData
+                });
+                const json = await res.json();
+                if (json.success) {
+                    document.getElementById('itemCover').value = json.url;
+                    const preview = document.getElementById('coverPreviewImg');
+                    preview.src = json.url;
+                    preview.style.display = 'block';
+                } else {
+                    alert('上传失败: ' + (json.error || ''));
+                }
+            } catch (e) {
+                alert('网络错误，上传失败');
+            }
+        }
+
+        document.getElementById('itemForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const id = document.getElementById('itemId').value;
+            const body = {
+                category_id: document.getElementById('itemCategoryId').value,
+                title: document.getElementById('itemTitle').value.trim(),
+                url: document.getElementById('itemUrl').value.trim(),
+                progress: document.getElementById('itemProgress').value.trim(),
+                notes: document.getElementById('itemNotes').value.trim(),
+                cover: document.getElementById('itemCover').value.trim(),
+                tag_ids: Array.from(document.querySelectorAll('#tagCheckboxes input:checked')).map(cb => parseInt(cb.value))
+            };
+            if (!body.category_id || !body.title) return alert('请填写分类和名称');
+            if (id) body.id = parseInt(id);
+            const url = id ? '/api/subscribe/items/update' : '/api/subscribe/items';
+            const method = id ? 'PUT' : 'POST';
+            try {
+                const res = await api(url, { method, body: JSON.stringify(body) });
+                if (res.success) {
+                    closeModal('itemModal');
+                    if (currentMode === 'category') {
+                        currentCategoryId === 0 ? filterAll() : filterByCategory(currentCategoryId);
+                    } else {
+                        filterByTag(currentTagId);
+                    }
+                } else {
+                    alert('保存失败: ' + (res.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('请求失败: ' + e.message);
+            }
+        });
+
+        // ==================== 辅助函数 ====================
+        function applyDarkModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                const content = modal.querySelector('.modal-content');
+                if (content) content.classList.add('dark-modal');
+            }
+        }
+        function removeDarkModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                const content = modal.querySelector('.modal-content');
+                if (content) content.classList.remove('dark-modal');
+            }
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+            removeDarkModal(modalId);
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, function(m) {
+                return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m];
+            });
+        }
+
+        // ========== 启动 ==========
+        loadNav().then(async () => {
+            applySpaceBackground();
+            const auth = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+            if (auth.status === 401) { localStorage.clear(); location.href = '/'; return; }
+            loadInitialData();
+        });
+    </script>
+</body>
+</html>

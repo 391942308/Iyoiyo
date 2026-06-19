@@ -1,0 +1,173 @@
+<header class="header" id="topNav">
+    <div class="nav-inner">
+        <div class="logo"><a href="/">Iyo&nbsp;</a></div>
+        <div class="user-actions" id="userActions">
+            <span id="loginBtnWrapper"><button class="btn-login" onclick="showLoginModal()">登录</button></span>
+            <div class="user-menu" id="loggedMenu" style="display:none;">
+                <!-- 铃铛通知按钮（改用 Google 精灵图闹钟图标） -->
+                <div class="notification-bell" id="notificationBell" style="display:none;" onclick="toggleNotificationList()">
+                    <span class="bell-icon"></span>
+                    <span class="badge" id="notifCount" style="display:none;">0</span>
+                    <div class="notification-dropdown" id="notificationList"></div>
+                </div>
+                <!-- AI 助理按钮 -->
+                <span class="ai-toggle-btn" id="aiToggleBtn" onclick="toggleAIPanel()" title="AI 助理" style="display:none;">🍀</span>
+                <img src="/assets/img/default-avatar.png" class="avatar" id="navAvatar" onclick="toggleNavMenu()">
+                <span id="navNickname" onclick="toggleNavMenu()"></span>
+                <div class="dropdown" id="dropdownMenu">
+                    <a href="/app/settings.html">⚙️ 个人配置</a>
+                    <a href="#" onclick="event.preventDefault();logout()">🚪 退出</a>
+                </div>
+                <!-- 独立我的应用按钮（九宫格图标） -->
+                <a href="/app/apps.html" class="nav-apps-btn" title="我的应用"></a>
+            </div>
+        </div>
+    </div>
+</header>
+
+<script>
+(function() {
+    function refreshNav() {
+        const token = localStorage.getItem('token');
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        const loginBtn = document.getElementById('loginBtnWrapper');
+        const loggedMenu = document.getElementById('loggedMenu');
+        const bell = document.getElementById('notificationBell');
+        const aiBtn = document.getElementById('aiToggleBtn');
+        const appsBtn = document.querySelector('.nav-apps-btn');
+
+        if (token && user.id) {
+            loginBtn.style.display = 'none';
+            loggedMenu.style.display = 'flex';
+            document.getElementById('navAvatar').src = user.avatar || '/assets/img/default-avatar.png';
+            document.getElementById('navNickname').innerText = user.nickname || user.username;
+
+            // 铃铛先隐藏，待检查后决定
+            bell.style.display = 'none';
+            checkNotifications();
+            if (window.notifInterval) clearInterval(window.notifInterval);
+            window.notifInterval = setInterval(checkNotifications, 30000);
+
+            // 九宫格按钮显示
+            if (appsBtn) appsBtn.style.display = 'block';
+
+            // AI 按钮根据配置显示
+            if (aiBtn) aiBtn.style.display = 'none';
+            fetch('/api/config/ai-status')
+                .then(res => res.json())
+                .then(json => {
+                    if (json.success && json.enabled && aiBtn) {
+                        aiBtn.style.display = 'inline';
+                    }
+                })
+                .catch(() => {
+                    if (aiBtn) aiBtn.style.display = 'none';
+                });
+        } else {
+            loginBtn.style.display = 'inline';
+            loggedMenu.style.display = 'none';
+            bell.style.display = 'none';
+            if (appsBtn) appsBtn.style.display = 'none';
+            if (aiBtn) aiBtn.style.display = 'none';
+            if (window.notifInterval) clearInterval(window.notifInterval);
+        }
+    }
+
+    async function checkNotifications() {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        try {
+            const res = await fetch('/api/reminders/check', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            const json = await res.json();
+            if (json.success) {
+                const badge = document.getElementById('notifCount');
+                const listDiv = document.getElementById('notificationList');
+                const bell = document.getElementById('notificationBell');
+                if (json.count > 0) {
+                    bell.style.display = 'inline-block';
+                    badge.style.display = 'inline';
+                    badge.textContent = json.count;
+                    let html = json.data.slice(0, 5).map(r => `
+                        <a href="/app/reminders.html?filter=pending" class="notif-item">
+                            <span>${escapeHtml(r.title)}</span>
+                            <span class="notif-time">${r.trigger_time || ''}</span>
+                        </a>
+                    `).join('');
+                    html += '<a href="/app/reminders.html" class="notif-all">查看全部 →</a>';
+                    listDiv.innerHTML = html;
+                } else {
+                    bell.style.display = 'none';
+                    badge.style.display = 'none';
+                    listDiv.innerHTML = '<span class="notif-empty">无新提醒</span>';
+                }
+            }
+        } catch(e) {}
+    }
+
+    function escapeHtml(text) {
+        return String(text).replace(/[&<>"']/g, function(m) {
+            return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m];
+        });
+    }
+
+    window.refreshNav = refreshNav;
+    window.updateNavAvatar = function(url) {
+        document.getElementById('navAvatar').src = url;
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        user.avatar = url;
+        localStorage.setItem('user', JSON.stringify(user));
+    };
+    window.updateNavNickname = function(name) {
+        document.getElementById('navNickname').innerText = name;
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        user.nickname = name;
+        localStorage.setItem('user', JSON.stringify(user));
+    };
+    window.toggleNavMenu = function() {
+        document.getElementById('dropdownMenu').classList.toggle('show');
+    };
+    window.toggleNotificationList = function() {
+        document.getElementById('notificationList').classList.toggle('show');
+    };
+    window.logout = function() {
+        localStorage.clear();
+        location.href = '/';
+    };
+    window.showLoginModal = function() {
+        if (typeof window.showLoginModalPage === 'function') {
+            window.showLoginModalPage();
+        } else {
+            location.href = '/';
+        }
+    };
+
+    refreshNav();
+
+    if (window.location.pathname !== '/' && window.location.pathname !== '/index.html') {
+        document.body.classList.add('has-fixed-nav');
+        const header = document.getElementById('topNav');
+        window.addEventListener('scroll', function() {
+            if (window.pageYOffset > 50) {
+                header.classList.add('nav-shrink');
+            } else {
+                header.classList.remove('nav-shrink');
+            }
+        });
+    }
+})();
+
+// 加载 AI 面板（登录后显示按钮，但面板组件全局可用）
+fetch('/components/ai-panel.html').then(r => r.text()).then(html => {
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    document.body.appendChild(div);
+    const scripts = div.querySelectorAll('script');
+    scripts.forEach(s => {
+        const newScript = document.createElement('script');
+        newScript.text = s.text;
+        document.body.appendChild(newScript);
+    });
+});
+</script>

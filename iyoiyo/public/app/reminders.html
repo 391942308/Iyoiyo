@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的提醒 - IYOIYO</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <div id="navContainer"></div>
+    <div class="container">
+        <main class="reminders-page">
+            <h1>⏰ 我的提醒</h1>
+
+            <div class="filter-bar">
+                <button class="filter-btn active" data-type="all" onclick="filterReminders('all')">全部</button>
+                <button class="filter-btn" data-type="once" onclick="filterReminders('once')">定时任务</button>
+                <button class="filter-btn" data-type="repeat" onclick="filterReminders('repeat')">循环任务</button>
+                <button class="filter-btn" data-type="permanent" onclick="filterReminders('permanent')">永久提醒</button>
+                <button class="filter-btn" data-type="pending" id="pendingFilterBtn" onclick="filterReminders('pending')">待确认</button>
+            </div>
+
+            <div class="reminders-list" id="remindersList"></div>
+
+            <div class="add-btn-container">
+                <button onclick="showAddDialog()">+ 添加提醒</button>
+            </div>
+
+            <!-- 添加/编辑弹窗 -->
+            <div class="modal" id="reminderModal">
+                <div class="modal-content">
+                    <span class="close" onclick="closeModal()">&times;</span>
+                    <h2 id="modalTitle">添加提醒</h2>
+                    <input type="hidden" id="editId">
+                    <select id="rType" onchange="toggleRepeatRule()">
+                        <option value="once">定时任务</option>
+                        <option value="repeat">循环任务</option>
+                        <option value="permanent">永久提醒</option>
+                    </select>
+                    <input type="text" id="rTitle" placeholder="标题" required>
+                    <textarea id="rDetail" placeholder="详细描述（可选）" rows="2"></textarea>
+                    <div id="triggerTimeGroup">
+                        <input type="datetime-local" id="rTriggerTime">
+                    </div>
+                    <div id="repeatRuleGroup" style="display:none;">
+                        <select id="rRepeatRule">
+                            <option value="daily">每天</option>
+                            <option value="weekly">每周</option>
+                            <option value="monthly">每月</option>
+                        </select>
+                    </div>
+                    <button onclick="saveReminder()">保存</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function loadNav() {
+            return fetch('/components/nav.html').then(r => r.text()).then(html => {
+                const container = document.getElementById('navContainer');
+                container.innerHTML = html;
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    newScript.text = oldScript.text;
+                    document.body.appendChild(newScript);
+                    oldScript.remove();
+                });
+            });
+        }
+
+        async function applySpaceBackground() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const res = await fetch('/api/config/settings', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) {
+                const settings = json.settings || {};
+                const user = json.user || {};
+                const html = document.documentElement;
+                if (settings.bg_space) {
+                    const img = new Image();
+                    img.onload = () => {
+                        html.style.backgroundImage = `url('${settings.bg_space}')`;
+                        html.style.backgroundSize = 'cover';
+                        html.style.backgroundPosition = 'center';
+                        html.style.backgroundAttachment = 'fixed';
+                    };
+                    img.src = settings.bg_space;
+                } else {
+                    html.style.backgroundImage = '';
+                    html.style.background = '#000000';
+                }
+                html.setAttribute('data-theme', user.theme || 'light');
+            }
+        }
+
+        let token = localStorage.getItem('token');
+        if (!token) { location.href = '/'; }
+
+        let remindersCache = [];
+        let currentFilter = 'all';
+
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('filter') === 'pending') {
+            currentFilter = 'pending';
+        }
+
+        function isTriggered(r) {
+            if (r.is_done == 1) return false;
+            if (r.type === 'permanent') return true;
+            if (!r.trigger_time) return false;
+            const now = new Date();
+            const triggerDate = new Date(r.trigger_time.replace(' ', 'T'));
+            return triggerDate <= now;
+        }
+
+        function getStatus(r) {
+            if (r.is_done == 1) return '已确认';
+            if (isTriggered(r)) return '待确认';
+            return '等待提醒';
+        }
+
+        function getStatusClass(r) {
+            const s = getStatus(r);
+            if (s === '已确认') return 'status-confirmed';
+            if (s === '待确认') return 'status-pending';
+            return 'status-waiting';
+        }
+
+        async function loadReminders() {
+            try {
+                const res = await fetch('/api/reminders', { headers: { 'Authorization': 'Bearer ' + token } });
+                const json = await res.json();
+                if (json.success) {
+                    remindersCache = json.data;
+                    renderReminders();
+                    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                    const activeBtn = document.querySelector(`.filter-btn[data-type="${currentFilter}"]`);
+                    if (activeBtn) activeBtn.classList.add('active');
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        function filterReminders(type) {
+            currentFilter = type;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            const btn = document.querySelector(`.filter-btn[data-type="${type}"]`);
+            if (btn) btn.classList.add('active');
+            renderReminders();
+        }
+
+        function renderReminders() {
+            const list = document.getElementById('remindersList');
+            let filtered = remindersCache;
+            if (currentFilter === 'pending') {
+                filtered = remindersCache.filter(r => isTriggered(r));
+            } else if (currentFilter !== 'all') {
+                filtered = remindersCache.filter(r => r.type === currentFilter);
+            }
+
+            if (filtered.length === 0) {
+                list.innerHTML = '<p class="empty-message">暂无提醒</p>';
+                return;
+            }
+
+            list.innerHTML = filtered.map(r => {
+                const status = getStatus(r);
+                const statusClass = getStatusClass(r);
+                const pending = isTriggered(r);
+
+                let confirmHtml = '';
+                if (pending && r.type === 'once') {
+                    confirmHtml = `<button class="btn-sm" onclick="confirmOnce(${r.id})">✓ 确认</button>`;
+                } else if (pending && r.type === 'repeat') {
+                    confirmHtml = `<button class="btn-sm" onclick="confirmRepeat(${r.id})">✓ 确认</button>`;
+                }
+                // 永久提醒无确认按钮
+
+                // 关键修复：仅循环任务显示重复规则
+                const repeatInfo = (r.repeat_rule && r.type === 'repeat') ? ' · ' + getRepeatLabel(r.repeat_rule) : '';
+
+                return `
+                <div class="reminder-card ${r.is_done ? 'done' : ''}">
+                    <div class="reminder-header">
+                        <span class="reminder-type noselect">${getTypeLabel(r.type)}</span>
+                        <span class="reminder-status noselect ${statusClass}">${status}</span>
+                    </div>
+                    <h3 class="reminder-title">${escapeHtml(r.title)}</h3>
+                    ${r.detail ? `<p class="reminder-detail">${escapeHtml(r.detail)}</p>` : ''}
+                    <div class="reminder-time noselect">
+                        ${r.trigger_time ? formatDateTime(r.trigger_time) : ''}
+                        ${repeatInfo}
+                    </div>
+                    <div class="reminder-actions">
+                        <button class="btn-sm" onclick="editReminder(${r.id})">✎ 编辑</button>
+                        ${confirmHtml}
+                        <button class="btn-sm danger" onclick="deleteReminder(${r.id})">✕ 删除</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function getTypeLabel(type) {
+            const map = { once: '定时', repeat: '循环', permanent: '永久' };
+            return map[type] || type;
+        }
+        function getRepeatLabel(rule) {
+            const map = { daily: '每天', weekly: '每周', monthly: '每月' };
+            return map[rule] || rule;
+        }
+        function formatDateTime(dt) {
+            if (!dt) return '';
+            const d = new Date(dt.replace(' ', 'T'));
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        }
+
+        function showAddDialog() {
+            document.getElementById('modalTitle').innerText = '添加提醒';
+            document.getElementById('editId').value = '';
+            document.getElementById('rType').value = 'once';
+            document.getElementById('rTitle').value = '';
+            document.getElementById('rDetail').value = '';
+            document.getElementById('rTriggerTime').value = '';
+            document.getElementById('rRepeatRule').value = 'daily';
+            toggleRepeatRule();
+            document.getElementById('reminderModal').style.display = 'flex';
+        }
+
+        function closeModal() { document.getElementById('reminderModal').style.display = 'none'; }
+
+        function toggleRepeatRule() {
+            const type = document.getElementById('rType').value;
+            document.getElementById('triggerTimeGroup').style.display = (type === 'permanent') ? 'none' : 'block';
+            document.getElementById('repeatRuleGroup').style.display = (type === 'repeat') ? 'block' : 'none';
+        }
+
+        async function editReminder(id) {
+            const r = remindersCache.find(r => r.id == id);
+            if (!r) return;
+            document.getElementById('modalTitle').innerText = '编辑提醒';
+            document.getElementById('editId').value = r.id;
+            document.getElementById('rType').value = r.type;
+            document.getElementById('rTitle').value = r.title;
+            document.getElementById('rDetail').value = r.detail || '';
+            document.getElementById('rTriggerTime').value = r.trigger_time ? r.trigger_time.replace(' ', 'T') : '';
+            document.getElementById('rRepeatRule').value = r.repeat_rule || 'daily';
+            toggleRepeatRule();
+            document.getElementById('reminderModal').style.display = 'flex';
+        }
+
+        async function saveReminder() {
+            const id = document.getElementById('editId').value;
+            const type = document.getElementById('rType').value;
+
+            const body = {
+                type: type,
+                title: document.getElementById('rTitle').value.trim(),
+                detail: document.getElementById('rDetail').value.trim(),
+                trigger_time: type === 'permanent' ? null : (document.getElementById('rTriggerTime').value.replace('T', ' ') || null),
+                repeat_rule: type === 'repeat' ? document.getElementById('rRepeatRule').value : ''
+            };
+
+            if (!body.title) { alert('标题不能为空'); return; }
+
+            if (id) body.id = parseInt(id);
+            const url = id ? '/api/reminders/update' : '/api/reminders';
+            const method = id ? 'PUT' : 'POST';
+            const res = await fetch(url, {
+                method,
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const json = await res.json();
+            if (json.success) {
+                closeModal();
+                loadReminders();
+            } else alert(json.error || '保存失败');
+        }
+
+        async function deleteReminder(id) {
+            if (!confirm('确定删除？')) return;
+            await fetch('/api/reminders/delete', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id })
+            });
+            loadReminders();
+        }
+
+        async function confirmOnce(id) {
+            if (!confirm('确认已知晓？该定时提醒将被删除。')) return;
+            await fetch('/api/reminders/delete', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id })
+            });
+            loadReminders();
+        }
+
+        async function confirmRepeat(id) {
+            const r = remindersCache.find(r => r.id == id);
+            if (!r) return;
+            const next = calculateNextTrigger(r.trigger_time, r.repeat_rule);
+            if (!next) return alert('无法计算下一次触发时间');
+            await fetch('/api/reminders/update', {
+                method: 'PUT',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, trigger_time: next, is_done: 0 })
+            });
+            loadReminders();
+        }
+
+        function calculateNextTrigger(current, rule) {
+            const d = new Date(current.replace(' ', 'T'));
+            if (isNaN(d.getTime())) return null;
+            switch (rule) {
+                case 'daily': d.setDate(d.getDate() + 1); break;
+                case 'weekly': d.setDate(d.getDate() + 7); break;
+                case 'monthly': d.setMonth(d.getMonth() + 1); break;
+                default: return null;
+            }
+            return d.toISOString().slice(0,10) + ' ' + d.toTimeString().slice(0,8);
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, function(m) {
+                return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m];
+            });
+        }
+
+        loadNav().then(async () => {
+            applySpaceBackground();
+            const auth = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+            if (auth.status === 401) { localStorage.clear(); location.href = '/'; return; }
+            loadReminders();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IYOIYO - いよいよ</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <script src="/assets/js/sortable/Sortable.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div id="navContainer"></div>
+
+        <main class="main-content" id="mainContent">
+            <div id="searchPage" class="search-section noselect" style="display:none;">
+                <h1>IYOIYO(いよいよ)</h1>
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="输入搜索关键词..." autofocus>
+                    <div class="engines">
+                        <button class="engine active" data-engine="https://www.baidu.com/s?wd=">百度</button>
+                        <button class="engine" data-engine="https://www.bing.com/search?q=">Bing</button>
+                        <button class="engine" data-engine="https://www.google.com/search?q=">Google</button>
+                        <button class="engine" data-engine="https://duckduckgo.com/?q=">DuckDuckGo</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="dashboardPage" class="dashboard-section" style="display:none;">
+                <div class="search-area-mini" id="searchAreaMini">
+                    <div class="dashboard-logo noselect">IYOIYO(いよいよ)</div>
+                    <div class="search-row">
+                        <input type="text" id="searchMini" placeholder="搜索或输入网址...">
+                        <select id="engineSelect">
+                            <option value="https://www.baidu.com/s?wd=">百度</option>
+                            <option value="https://www.bing.com/search?q=">Bing</option>
+                            <option value="https://www.google.com/search?q=">Google</option>
+                            <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button id="expandBookmarksBtn" class="expand-bookmarks-btn" style="display:none;" onclick="toggleBookmarks()">☰ 展开收藏夹</button>
+
+                <div class="bookmarks-wrapper" id="bookmarksWrapper">
+                    <div class="bookmarks-toolbar">
+                        <button id="toggleAllBtn" onclick="toggleAllCategories()">全部展开</button>
+                        <button onclick="showAddCategoryDialog()">+ 新建分类</button>
+                        <button onclick="showAddBookmarkDialog()">+ 添加网站</button>
+                        <span style="flex:1;"></span>
+                        <button id="toggleBookmarksBtn" onclick="toggleBookmarks()">▲ 收起</button>
+                    </div>
+                    <div class="bookmarks-container" id="bookmarksContainer"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="modal" id="loginModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeLoginModal()">&times;</span>
+            <h2>登录 IYOIYO</h2>
+            <form id="loginForm">
+                <input type="text" name="username" placeholder="用户名" required>
+                <input type="password" name="password" placeholder="密码" required>
+                <button type="submit">登录</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal" id="actionModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeActionModal()">&times;</span>
+            <h2 id="actionTitle"></h2>
+            <div id="actionBody"></div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 工具函数 ====================
+        function formatUrl(url) {
+            if (/^https?:\/\//i.test(url)) return url;
+            return '//' + url.replace(/^\/+/, '');
+        }
+
+        function loadNav() {
+            return fetch('/components/nav.html').then(r => r.text()).then(html => {
+                const container = document.getElementById('navContainer');
+                container.innerHTML = html;
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    newScript.text = oldScript.text;
+                    document.body.appendChild(newScript);
+                    oldScript.remove();
+                });
+            });
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/[&<>"']/g, function(m) {
+                return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m];
+            });
+        }
+
+        function showLoginModal() { document.getElementById('loginModal').style.display = 'flex'; }
+        function closeLoginModal() { document.getElementById('loginModal').style.display = 'none'; }
+        window.showLoginModalPage = showLoginModal;
+
+        function openActionModal() { document.getElementById('actionModal').style.display = 'flex'; }
+        function closeActionModal() { document.getElementById('actionModal').style.display = 'none'; }
+
+        // ==================== 全局状态 ====================
+        let currentUser = null;
+        let token = localStorage.getItem('token');
+        let bookmarksData = {};
+        let categoriesData = [];
+        let allExpanded = false;
+        let bookmarksCollapsed = true;
+
+        // ==================== 设置背景与主题 ====================
+        async function applySettings() {
+            if (!token) return;
+            try {
+                const res = await fetch('/api/config/settings', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+                const json = await res.json();
+                if (json.success) {
+                    const settings = json.settings || {};
+                    const user = json.user;
+                    const theme = user.theme || 'light';
+                    document.documentElement.setAttribute('data-theme', theme);
+
+                    if (settings.bg_home) {
+                        document.body.style.background = `url('${settings.bg_home}') center/cover fixed`;
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // ==================== 数据加载 ====================
+        async function loadCategories() {
+            if (!token) return;
+            const res = await fetch('/api/bookmarks/categories', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) categoriesData = json.data;
+        }
+
+        async function loadBookmarks() {
+            if (!token) return;
+            const res = await fetch('/api/bookmarks', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) bookmarksData = json.data;
+        }
+
+        // ==================== 界面切换 ====================
+        function showSearchPage() {
+            document.getElementById('searchPage').style.display = 'flex';
+            document.getElementById('dashboardPage').style.display = 'none';
+            document.documentElement.setAttribute('data-theme', 'light');
+        }
+
+        function showDashboard() {
+            document.getElementById('searchPage').style.display = 'none';
+            document.getElementById('dashboardPage').style.display = 'flex';
+            renderBookmarks();
+            if (bookmarksCollapsed) {
+                document.getElementById('bookmarksWrapper').style.display = 'none';
+                document.getElementById('expandBookmarksBtn').style.display = 'inline-block';
+                document.getElementById('toggleBookmarksBtn').textContent = '▼ 展开';
+                document.getElementById('dashboardPage').classList.add('bookmarks-collapsed');
+            } else {
+                document.getElementById('bookmarksWrapper').style.display = 'flex';
+                document.getElementById('expandBookmarksBtn').style.display = 'none';
+                document.getElementById('toggleBookmarksBtn').textContent = '▲ 收起';
+                document.getElementById('dashboardPage').classList.remove('bookmarks-collapsed');
+            }
+        }
+
+        function logout() {
+            localStorage.clear();
+            token = null;
+            currentUser = null;
+            showSearchPage();
+            loadNav();
+        }
+
+        // ==================== 收藏夹渲染 ====================
+        function renderBookmarks() {
+            const container = document.getElementById('bookmarksContainer');
+            if (categoriesData.length === 0) {
+                container.innerHTML = '<p class="empty-message">还没有分类，请先创建分类</p>';
+                initSortable();
+                return;
+            }
+            let html = '';
+            categoriesData.forEach(cat => {
+                const items = bookmarksData[cat] || [];
+                html += `<details class="bookmark-category" data-category="${escapeHtml(cat)}">
+                    <summary class="cat-header">
+                        <span class="cat-title">${escapeHtml(cat)}</span>
+                        <span class="cat-toggle-icon">▶</span>
+                        <div class="cat-actions" onclick="event.preventDefault(); event.stopPropagation();">
+                            <button onclick="editCategory('${escapeHtml(cat)}')" title="重命名">✎</button>
+                            <button onclick="deleteCategory('${escapeHtml(cat)}')" title="删除">✕</button>
+                        </div>
+                    </summary>
+                    <div class="cat-items">
+                        ${items.length ? items.map(item => {
+                            let host = '';
+                            try { host = new URL(item.url.startsWith('//') ? 'https:' + item.url : item.url).hostname; } catch (e) {}
+                            return `<a href="${item.url}" target="_blank" class="bookmark-item" title="${escapeHtml(item.title)}">
+                                <img src="${item.icon || (host ? '//api.afmax.cn/so/ico/index.php?r=' + host : '/assets/img/default-favicon.png')}"
+                                     onerror="this.src='/assets/img/default-favicon.png'">
+                                <span>${escapeHtml(item.title)}</span>
+                                <span class="item-actions">
+                                    <button class="item-edit" onclick="event.preventDefault(); event.stopPropagation(); editBookmark(${item.id}, '${escapeHtml(item.title)}', '${escapeHtml(item.url)}', '${escapeHtml(item.category_name)}')">✎</button>
+                                    <button class="item-delete" onclick="event.preventDefault(); event.stopPropagation(); deleteBookmark(${item.id})">✕</button>
+                                </span>
+                            </a>`;
+                        }).join('') : '<p class="empty-hint">暂无内容</p>'}
+                    </div>
+                </details>`;
+            });
+            container.innerHTML = html;
+            initSortable();
+            updateToggleButton();
+        }
+
+        // 一键展开/收起
+        function toggleAllCategories() {
+            const allDetails = document.querySelectorAll('#bookmarksContainer details');
+            allExpanded = !allExpanded;
+            allDetails.forEach(d => {
+                if (allExpanded) d.setAttribute('open', '');
+                else d.removeAttribute('open');
+            });
+            updateToggleButton();
+        }
+
+        function updateToggleButton() {
+            const btn = document.getElementById('toggleAllBtn');
+            if (btn) btn.textContent = allExpanded ? '全部收起' : '全部展开';
+        }
+
+        function toggleBookmarks() {
+            bookmarksCollapsed = !bookmarksCollapsed;
+            const wrapper = document.getElementById('bookmarksWrapper');
+            const expandBtn = document.getElementById('expandBookmarksBtn');
+            const toggleBtn = document.getElementById('toggleBookmarksBtn');
+            const dash = document.getElementById('dashboardPage');
+
+            if (bookmarksCollapsed) {
+                wrapper.style.display = 'none';
+                expandBtn.style.display = 'inline-block';
+                toggleBtn.textContent = '▼ 展开';
+                dash.classList.add('bookmarks-collapsed');
+            } else {
+                wrapper.style.display = 'flex';
+                expandBtn.style.display = 'none';
+                toggleBtn.textContent = '▲ 收起';
+                dash.classList.remove('bookmarks-collapsed');
+            }
+        }
+
+        // 拖动排序
+        function initSortable() {
+            const container = document.getElementById('bookmarksContainer');
+            if (window.sortableInstance) window.sortableInstance.destroy();
+            window.sortableInstance = new Sortable(container, {
+                handle: '.cat-header',
+                animation: 200,
+                ghostClass: 'sortable-ghost',
+                onEnd: async function() {
+                    const details = container.querySelectorAll('details');
+                    const newOrder = Array.from(details).map(d => d.dataset.category);
+                    categoriesData = newOrder;
+                    await fetch('/api/bookmarks/categories/order', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ order: newOrder })
+                    });
+                }
+            });
+        }
+
+        // ==================== 分类操作 ====================
+        function showAddCategoryDialog() {
+            const name = prompt('输入新分类名');
+            if (name) addCategory(name);
+        }
+
+        async function addCategory(name) {
+            const res = await fetch('/api/bookmarks/category', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const json = await res.json();
+            if (json.success) {
+                categoriesData = json.data;
+                await loadBookmarks();
+                renderBookmarks();
+            } else {
+                alert(json.error || '添加失败');
+            }
+        }
+
+        async function editCategory(oldName) {
+            const newName = prompt('修改分类名:', oldName);
+            if (!newName || newName === oldName) return;
+            const res = await fetch('/api/bookmarks/category', {
+                method: 'PUT',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ old_name: oldName, new_name: newName })
+            });
+            const json = await res.json();
+            if (json.success) {
+                categoriesData = json.data;
+                await loadBookmarks();
+                renderBookmarks();
+            } else {
+                alert(json.error || '重命名失败');
+            }
+        }
+
+        async function deleteCategory(name) {
+            if (!confirm(`确定删除分类“${name}”及其所有书签？`)) return;
+            const res = await fetch('/api/bookmarks/category', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const json = await res.json();
+            if (json.success) {
+                categoriesData = json.data;
+                await loadBookmarks();
+                renderBookmarks();
+            } else {
+                alert(json.error || '删除失败');
+            }
+        }
+
+        // ==================== 书签操作 ====================
+        function showAddBookmarkDialog() {
+            document.getElementById('actionTitle').innerText = '添加网站';
+            let options = categoriesData.map(c => `<option value="${c}">${c}</option>`).join('');
+            if (!options) options = '<option value="未分类">未分类</option>';
+            document.getElementById('actionBody').innerHTML = `
+                <input type="text" id="bmTitle" placeholder="标题"><br>
+                <input type="text" id="bmUrl" placeholder="网址（如 www.baidu.com）"><br>
+                <select id="bmCategory">${options}</select><br>
+                <button onclick="addBookmark()">保存</button>
+            `;
+            openActionModal();
+        }
+
+        async function addBookmark() {
+            const title = document.getElementById('bmTitle').value.trim();
+            let url = document.getElementById('bmUrl').value.trim();
+            const category = document.getElementById('bmCategory').value;
+            if (!title || !url) return alert('请填写完整');
+            url = formatUrl(url);
+            const res = await fetch('/api/bookmarks', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ category_name: category, title, url })
+            });
+            const json = await res.json();
+            if (json.success) {
+                closeActionModal();
+                await loadBookmarks();
+                renderBookmarks();
+            } else {
+                alert(json.error || '添加失败');
+            }
+        }
+
+        function editBookmark(id, title, url, cat) {
+            document.getElementById('actionTitle').innerText = '编辑书签';
+            let options = categoriesData.map(c => `<option value="${c}" ${c === cat ? 'selected' : ''}>${c}</option>`).join('');
+            document.getElementById('actionBody').innerHTML = `
+                <input type="text" id="editBmTitle" value="${title}"><br>
+                <input type="text" id="editBmUrl" value="${url}"><br>
+                <select id="editBmCat">${options}</select><br>
+                <button onclick="updateBookmark(${id})">保存</button>
+            `;
+            openActionModal();
+        }
+
+        async function updateBookmark(id) {
+            const title = document.getElementById('editBmTitle').value.trim();
+            let url = document.getElementById('editBmUrl').value.trim();
+            const category = document.getElementById('editBmCat').value;
+            if (!title || !url) return alert('请填写完整');
+            url = formatUrl(url);
+            await fetch('/api/bookmarks/update', {
+                method: 'PUT',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, title, url, category_name: category })
+            });
+            closeActionModal();
+            await loadBookmarks();
+            renderBookmarks();
+        }
+
+        async function deleteBookmark(id) {
+            if (!confirm('删除此书签？')) return;
+            await fetch('/api/bookmarks/delete', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id })
+            });
+            await loadBookmarks();
+            renderBookmarks();
+        }
+
+        // ==================== 初始化 ====================
+        async function init() {
+            if (token) {
+                try {
+                    const res = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+                    if (res.status === 401) {
+                        logout();
+                        return;
+                    }
+                    const json = await res.json();
+                    if (json.success) {
+                        currentUser = json.user;
+                        localStorage.setItem('user', JSON.stringify(json.user));
+                        if (window.refreshNav) refreshNav();
+                        await applySettings();
+                        await loadCategories();
+                        await loadBookmarks();
+                        showDashboard();
+                        return;
+                    }
+                } catch (e) { console.error(e); }
+            }
+            showSearchPage();
+        }
+
+        // 登录表单
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData.entries());
+            const res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            const json = await res.json();
+            if (json.success) {
+                localStorage.setItem('token', json.token);
+                localStorage.setItem('user', JSON.stringify(json.user));
+                token = json.token;
+                currentUser = json.user;
+                closeLoginModal();
+                if (window.refreshNav) refreshNav();
+                await applySettings();
+                await loadCategories();
+                await loadBookmarks();
+                showDashboard();
+            } else {
+                alert(json.error || '登录失败');
+            }
+        });
+
+        // 搜索功能
+        (function() {
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                const engines = document.querySelectorAll('#searchPage .engine');
+                let currentEngine = 'https://www.baidu.com/s?wd=';
+                engines.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        engines.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        currentEngine = btn.dataset.engine;
+                    });
+                });
+                searchInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter' && searchInput.value.trim()) {
+                        window.location.href = currentEngine + encodeURIComponent(searchInput.value.trim());
+                    }
+                });
+            }
+        })();
+
+        const searchMini = document.getElementById('searchMini');
+        const engineSelect = document.getElementById('engineSelect');
+        if (searchMini) {
+            searchMini.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter' && searchMini.value.trim()) {
+                    window.location.href = engineSelect.value + encodeURIComponent(searchMini.value.trim());
+                }
+            });
+        }
+
+        // 启动
+        loadNav().then(() => init());
+    </script>
+</body>
+</html>

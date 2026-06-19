@@ -1,0 +1,117 @@
+<!-- AI 对话面板（默认隐藏） -->
+<div id="aiPanel" class="ai-panel">
+    <div class="ai-panel-header">
+        <span>🍀 Iyo 助理 小凪</span>
+        <button class="ai-close-btn" onclick="toggleAIPanel()">✕</button>
+    </div>
+    <div class="ai-messages" id="aiMessages">
+        <div class="ai-msg bot">你好！我是你的个人助理小凪，可以帮你管理笔记、提醒等。试试对我说“帮我记一笔账”或“我有哪些提醒”。</div>
+    </div>
+    <div class="ai-input-area">
+        <button class="ai-mic-btn" id="aiMicBtn" onclick="startVoice()" title="语音输入">🎤</button>
+        <input type="text" id="aiInput" placeholder="输入消息..." onkeypress="if(event.key==='Enter')sendMessage()">
+        <button class="ai-send-btn" onclick="sendMessage()">发送</button>
+    </div>
+</div>
+
+<script>
+(function() {
+    // 对话历史（保留最近10条）
+    let chatHistory = [];
+    let isPanelOpen = false;
+
+    window.toggleAIPanel = function() {
+        const panel = document.getElementById('aiPanel');
+        isPanelOpen = !isPanelOpen;
+        panel.classList.toggle('open', isPanelOpen);
+        if (isPanelOpen) {
+            document.getElementById('aiInput').focus();
+        }
+    };
+
+    // 将 sendMessage 挂载到 window 上，确保内联 onclick 可调用
+    window.sendMessage = async function() {
+        const input = document.getElementById('aiInput');
+        const message = input.value.trim();
+        if (!message) return;
+
+        addMessage('user', message);
+        input.value = '';
+
+        // 添加到历史
+        chatHistory.push({ role: 'user', content: message });
+        if (chatHistory.length > 10) chatHistory.shift();
+
+        // 显示加载状态
+        const loadingId = addMessage('bot', '<i>思考中...</i>');
+
+        try {
+            const token = localStorage.getItem('token');
+            const res = await fetch('/api/ai/chat', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    message,
+                    history: chatHistory
+                })
+            });
+            const json = await res.json();
+            // 移除加载消息
+            removeMessage(loadingId);
+            if (json.success && json.reply) {
+                addMessage('bot', json.reply);
+                chatHistory.push({ role: 'assistant', content: json.reply });
+            } else {
+                addMessage('bot', '抱歉，我现在无法回答。请稍后再试。');
+            }
+        } catch (e) {
+            removeMessage(loadingId);
+            addMessage('bot', '网络好像走丢了，小凪现在无法帮到您呢。');
+        }
+    };
+
+    function addMessage(role, content) {
+        const container = document.getElementById('aiMessages');
+        const div = document.createElement('div');
+        div.className = `ai-msg ${role}`;
+        const id = 'msg-' + Date.now();
+        div.id = id;
+        div.innerHTML = content;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+        return id;
+    }
+
+    function removeMessage(id) {
+        const msg = document.getElementById(id);
+        if (msg) msg.remove();
+    }
+
+    // 语音识别
+    window.startVoice = function() {
+        if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+            alert('您的浏览器不支持语音识别');
+            return;
+        }
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'zh-CN';
+        recognition.interimResults = false;
+        recognition.onresult = function(event) {
+            const transcript = event.results[0][0].transcript;
+            document.getElementById('aiInput').value = transcript;
+            window.sendMessage();  // 使用全局函数
+        };
+        recognition.onerror = function(event) {
+            alert('语音识别出错: ' + event.error);
+        };
+        recognition.start();
+    };
+
+    // 可选：挂载 sendAIMessage 别名
+    window.sendAIMessage = window.sendMessage;
+})();
+</script>

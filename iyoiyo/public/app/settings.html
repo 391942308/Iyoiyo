@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人配置 - IYOIYO</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <div id="navContainer"></div>
+        <main class="settings-page">
+            <h1>⚙️ 个人配置</h1>
+            <div class="settings-grid">
+                <div class="setting-card">
+                    <h3>头像</h3>
+                    <img id="avatarPreview" class="avatar-large" src="/assets/img/default-avatar.png">
+                    <input type="file" id="avatarInput" accept="image/*">
+                    <button onclick="uploadAvatar()">上传新头像</button>
+                </div>
+                <div class="setting-card">
+                    <h3>修改密码</h3>
+                    <input type="password" id="oldPassword" placeholder="当前密码">
+                    <input type="password" id="newPassword" placeholder="新密码">
+                    <button onclick="changePassword()">保存</button>
+                </div>
+                <div class="setting-card">
+                    <h3>首页背景</h3>
+                    <div class="bg-preview" id="homeBgPreview">无背景</div>
+                    <input type="file" id="homeBgInput" accept="image/*">
+                    <button onclick="uploadBg('home')">上传</button>
+                </div>
+                <div class="setting-card">
+                    <h3>个人空间背景</h3>
+                    <div class="bg-preview" id="spaceBgPreview">无背景</div>
+                    <input type="file" id="spaceBgInput" accept="image/*">
+                    <button onclick="uploadBg('space')">上传</button>
+                </div>
+                <div class="setting-card">
+                    <h3>主题色调</h3>
+                    <select id="themeSelect">
+                        <option value="light">亮色</option>
+                        <option value="dark">暗色</option>
+                    </select>
+                    <button onclick="saveTheme()">应用</button>
+                </div>
+            </div>
+            <a href="/" class="back-link">← 返回首页</a>
+        </main>
+    </div>
+
+    <script>
+        function loadNav() {
+            return fetch('/components/nav.html').then(r => r.text()).then(html => {
+                const container = document.getElementById('navContainer');
+                container.innerHTML = html;
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    newScript.text = oldScript.text;
+                    document.body.appendChild(newScript);
+                    oldScript.remove();
+                });
+            });
+        }
+
+        let token = localStorage.getItem('token');
+        if (!token) location.href = '/';
+
+        // 应用个人空间背景和主题
+        async function applySpaceBackground() {
+            if (!token) return;
+            const res = await fetch('/api/config/settings', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            const json = await res.json();
+            if (json.success) {
+                const settings = json.settings || {};
+                const user = json.user || {};
+
+                // 应用背景图
+                if (settings.bg_space) {
+                    const img = new Image();
+                    img.onload = () => {
+                        document.documentElement.style.backgroundImage = `url('${settings.bg_space}')`;
+                        document.documentElement.style.backgroundSize = 'cover';
+                        document.documentElement.style.backgroundPosition = 'center';
+                        document.documentElement.style.backgroundAttachment = 'fixed';
+                    };
+                    img.src = settings.bg_space;
+                } else {
+                    document.documentElement.style.background = '#000000'; // 默认纯黑
+                }
+
+                // 应用主题
+                const theme = user.theme || 'light';
+                document.documentElement.setAttribute('data-theme', theme);
+            }
+        }
+
+        loadNav().then(() => {
+            applySpaceBackground();
+            fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } }).then(res => {
+                if (res.status === 401) { localStorage.clear(); location.href = '/'; }
+                else loadSettings();
+            });
+        });
+
+        async function loadSettings() {
+            const res = await fetch('/api/config/settings', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            const json = await res.json();
+            if (json.success) {
+                const settings = json.settings;
+                const user = json.user;
+                document.getElementById('avatarPreview').src = user.avatar || '/assets/img/default-avatar.png';
+                if (settings.bg_home) {
+                    document.getElementById('homeBgPreview').style.backgroundImage = `url(${settings.bg_home})`;
+                    document.getElementById('homeBgPreview').innerText = '';
+                }
+                if (settings.bg_space) {
+                    document.getElementById('spaceBgPreview').style.backgroundImage = `url(${settings.bg_space})`;
+                    document.getElementById('spaceBgPreview').innerText = '';
+                }
+                document.getElementById('themeSelect').value = user.theme || 'light';
+            }
+        }
+
+        async function uploadAvatar() {
+            const file = document.getElementById('avatarInput').files[0];
+            if (!file) return alert('请选择文件');
+            const formData = new FormData();
+            formData.append('avatar', file);
+            const res = await fetch('/api/config/avatar', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token },
+                body: formData
+            });
+            const json = await res.json();
+            if (json.success) {
+                document.getElementById('avatarPreview').src = json.url;
+                if (window.updateNavAvatar) updateNavAvatar(json.url);
+            } else alert(json.error || '上传失败');
+        }
+
+        async function uploadBg(type) {
+            const inputId = type === 'home' ? 'homeBgInput' : 'spaceBgInput';
+            const file = document.getElementById(inputId).files[0];
+            if (!file) return alert('请选择文件');
+            const formData = new FormData();
+            formData.append('bg', file);
+            const endpoint = type === 'home' ? '/api/config/bg-home' : '/api/config/bg-space';
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token },
+                body: formData
+            });
+            const json = await res.json();
+            if (json.success) {
+                const previewId = type === 'home' ? 'homeBgPreview' : 'spaceBgPreview';
+                document.getElementById(previewId).style.backgroundImage = `url(${json.url})`;
+                document.getElementById(previewId).innerText = '';
+            } else alert(json.error || '上传失败');
+        }
+
+        async function changePassword() {
+            const oldPassword = document.getElementById('oldPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+            if (!oldPassword || !newPassword) return alert('请填写完整');
+            const res = await fetch('/api/config/password', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
+            });
+            const json = await res.json();
+            if (json.success) {
+                alert('密码修改成功');
+                document.getElementById('oldPassword').value = '';
+                document.getElementById('newPassword').value = '';
+            } else alert(json.error || '修改失败');
+        }
+
+        async function saveTheme() {
+            const theme = document.getElementById('themeSelect').value;
+            await fetch('/api/config/settings', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ theme })
+            });
+            alert('主题已保存，刷新后生效');
+        }
+    </script>
+</body>
+</html>

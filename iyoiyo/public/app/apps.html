@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的应用 - IYOIYO</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <div id="navContainer"></div>
+
+        <main class="apps-page">
+            <h1>📦 我的应用</h1>
+            <div class="app-grid">
+                <a href="/app/notes.html" class="app-card">
+                    <div class="app-icon">📝</div>
+                    <h3>我的手札</h3>
+                    <p>记录笔记，分类管理</p>
+                </a>
+                <a href="/app/finance.html" class="app-card">
+                    <div class="app-icon">💰</div>
+                    <h3>我的记账</h3>
+                    <p>收支记录，分类统计</p>
+                </a>
+                <a href="/app/reminders.html" class="app-card">
+                    <div class="app-icon">⏰</div>
+                    <h3>我的提醒</h3>
+                    <p>定时、循环、永久提醒</p>
+                </a>
+                <a href="/app/subscribe.html" class="app-card">
+                    <div class="app-icon">📺</div>
+                    <h3>我的订阅</h3>
+                    <p>书籍、番剧……</p>
+                </a>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // 导航加载（含脚本执行）
+        function loadNav() {
+            return fetch('/components/nav.html').then(r => r.text()).then(html => {
+                const container = document.getElementById('navContainer');
+                container.innerHTML = html;
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    newScript.text = oldScript.text;
+                    document.body.appendChild(newScript);
+                    oldScript.remove();
+                });
+            });
+        }
+
+        const token = localStorage.getItem('token');
+        if (!token) location.href = '/';
+
+        // 应用个人空间背景和主题
+        async function applySpaceBackground() {
+            if (!token) return;
+            const res = await fetch('/api/config/settings', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            const json = await res.json();
+            if (json.success) {
+                const settings = json.settings || {};
+                const user = json.user || {};
+
+                // 应用背景图
+                if (settings.bg_space) {
+                    const img = new Image();
+                    img.onload = () => {
+                        document.documentElement.style.backgroundImage = `url('${settings.bg_space}')`;
+                        document.documentElement.style.backgroundSize = 'cover';
+                        document.documentElement.style.backgroundPosition = 'center';
+                        document.documentElement.style.backgroundAttachment = 'fixed';
+                    };
+                    img.src = settings.bg_space;
+                } else {
+                    document.documentElement.style.background = '#000000'; // 默认纯黑
+                }
+
+                // 应用主题
+                const theme = user.theme || 'light';
+                document.documentElement.setAttribute('data-theme', theme);
+            }
+        }
+
+        loadNav().then(() => {
+            applySpaceBackground();
+        });
+    </script>
+</body>
+</html>

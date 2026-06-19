@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的记账 - IYOIYO</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <script src="/assets/js/chart/chart.js"></script>
+</head>
+<body>
+    <div id="navContainer"></div>
+    <div class="container">
+        <main class="finance-page">
+            <h1>💰 我的记账</h1>
+
+            <div class="stats-cards" id="statsCards">
+                <div class="stat income">收入: ¥<span id="statIncome">0</span></div>
+                <div class="stat expense">支出: ¥<span id="statExpense">0</span></div>
+                <div class="stat balance">结余: ¥<span id="statBalance">0</span></div>
+            </div>
+
+            <div class="filter-bar">
+                <input type="date" id="startDate"> 至 <input type="date" id="endDate">
+                <button onclick="applyFilter()">筛选</button>
+                <button onclick="resetFilter()">本月</button>
+                <button onclick="quickFilter('week')">本周</button>
+                <button onclick="quickFilter('year')">今年</button>
+            </div>
+
+            <div class="table-wrapper">
+                <table id="recordTable">
+                    <thead>
+                        <tr><th>日期</th><th>类型</th><th>分类</th><th>项目</th><th>金额</th><th>备注</th><th>操作</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="add-btn-container">
+                <button onclick="showAddDialog()">+ 添加记录</button>
+                <button onclick="showManageCategories()" class="btn-outline">📁 管理分类</button>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="categoryChart" width="400" height="200"></canvas>
+            </div>
+
+            <!-- 添加/编辑记录弹窗 -->
+            <div class="modal" id="financeModal">
+                <div class="modal-content">
+                    <span class="close" onclick="closeModal()">&times;</span>
+                    <h2 id="financeModalTitle">添加记录</h2>
+                    <input type="hidden" id="editId">
+                    <select id="fType">
+                        <option value="expense">支出</option>
+                        <option value="income">收入</option>
+                    </select>
+                    <select id="fCategorySelect"></select>
+                    <input type="text" id="fItem" placeholder="项目名称" required>
+                    <input type="number" id="fAmount" placeholder="金额" step="0.01" required>
+                    <input type="date" id="fDate">
+                    <input type="text" id="fNote" placeholder="备注">
+                    <button onclick="saveRecord()">保存</button>
+                </div>
+            </div>
+
+            <!-- 管理分类弹窗 -->
+            <div class="modal" id="categoryModal">
+                <div class="modal-content dark-modal">
+                    <span class="close" onclick="closeCategoryModal()">&times;</span>
+                    <h2>📁 管理分类</h2>
+                    <div class="cat-manage-list" id="catManageList"></div>
+                    <div class="cat-add-row">
+                        <input type="text" id="newCatName" placeholder="输入新分类名称">
+                        <button onclick="addCustomCategory()">添加</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // ========== 导航加载 ==========
+        function loadNav() {
+            return fetch('/components/nav.html').then(r => r.text()).then(html => {
+                const container = document.getElementById('navContainer');
+                container.innerHTML = html;
+                const scripts = container.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+                    newScript.text = oldScript.text;
+                    document.body.appendChild(newScript);
+                    oldScript.remove();
+                });
+            });
+        }
+
+        // ========== 背景与主题 ==========
+        async function applySpaceBackground() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            const res = await fetch('/api/config/settings', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) {
+                const settings = json.settings || {};
+                const user = json.user || {};
+                const html = document.documentElement;
+                if (settings.bg_space) {
+                    const img = new Image();
+                    img.onload = () => {
+                        html.style.backgroundImage = `url('${settings.bg_space}')`;
+                        html.style.backgroundSize = 'cover';
+                        html.style.backgroundPosition = 'center';
+                        html.style.backgroundAttachment = 'fixed';
+                    };
+                    img.src = settings.bg_space;
+                } else {
+                    html.style.backgroundImage = '';
+                    html.style.background = '#000000';
+                }
+                html.setAttribute('data-theme', user.theme || 'light');
+            }
+        }
+
+        let token = localStorage.getItem('token');
+        if (!token) { location.href = '/'; }
+
+        let categoriesCache = [];
+        let currentStart = '', currentEnd = '';
+
+        // ========== 分类操作（等待服务器响应） ==========
+        async function fetchCategories() {
+            const res = await fetch('/api/finances/categories', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) categoriesCache = json.data;
+            return categoriesCache;
+        }
+
+        async function saveCategoriesToServer(cats) {
+            const res = await fetch('/api/finances/categories', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ categories: cats })
+            });
+            const json = await res.json();
+            if (!json.success) throw new Error(json.error || '保存失败');
+        }
+
+        async function refreshCategorySelect() {
+            await fetchCategories();
+            const select = document.getElementById('fCategorySelect');
+            select.innerHTML = categoriesCache.map(c => `<option value="${c}">${c}</option>`).join('');
+            if (categoriesCache.length === 0) select.innerHTML = '<option value="其他">其他</option>';
+        }
+
+        // 管理分类弹窗
+        async function showManageCategories() {
+            await fetchCategories();
+            renderCategoryList();
+            document.getElementById('categoryModal').style.display = 'flex';
+        }
+
+        function closeCategoryModal() {
+            document.getElementById('categoryModal').style.display = 'none';
+        }
+
+        function renderCategoryList() {
+            const list = document.getElementById('catManageList');
+            if (categoriesCache.length === 0) {
+                list.innerHTML = '<p style="text-align:center; color:#aaa;">暂无分类，请添加</p>';
+                return;
+            }
+            list.innerHTML = categoriesCache.map(c => `
+                <div class="cat-item">
+                    <span class="cat-name">${c}</span>
+                    <div class="cat-item-actions">
+                        <button class="btn-sm" onclick="renameCategory('${c}')">✎</button>
+                        <button class="btn-sm danger" onclick="deleteCategory('${c}')">✕</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function addCustomCategory() {
+            const input = document.getElementById('newCatName');
+            const name = input.value.trim();
+            if (!name) return;
+            if (categoriesCache.includes(name)) {
+                alert('分类已存在');
+                return;
+            }
+            try {
+                // 先提交到服务器
+                const newCats = [...categoriesCache, name];
+                await saveCategoriesToServer(newCats);
+                // 成功后刷新
+                await fetchCategories();
+                renderCategoryList();
+                await refreshCategorySelect();
+                input.value = '';
+            } catch (e) {
+                alert('添加失败：' + e.message);
+            }
+        }
+
+        async function renameCategory(oldName) {
+            const newName = prompt('重命名分类', oldName);
+            if (!newName || newName === oldName) return;
+            const res = await fetch('/api/finances/category', {
+                method: 'PUT',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ old_name: oldName, new_name: newName })
+            });
+            const json = await res.json();
+            if (json.success) {
+                await fetchCategories();
+                renderCategoryList();
+                await refreshCategorySelect();
+                loadData();
+            } else {
+                alert('重命名失败：' + (json.error || ''));
+            }
+        }
+
+        async function deleteCategory(name) {
+            if (!confirm(`确定删除分类“${name}”吗？\n（该分类下的记录不会被删除）`)) return;
+            const res = await fetch('/api/finances/category', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, delete_records: false })
+            });
+            const json = await res.json();
+            if (json.success) {
+                await fetchCategories();
+                renderCategoryList();
+                await refreshCategorySelect();
+            } else {
+                alert('删除失败：' + (json.error || ''));
+            }
+        }
+
+        // ========== 记账数据 ==========
+        function resetFilter() {
+            const now = new Date();
+            const y = now.getFullYear();
+            const m = now.getMonth() + 1;
+            document.getElementById('startDate').value = `${y}-${String(m).padStart(2,'0')}-01`;
+            document.getElementById('endDate').value = `${y}-${String(m).padStart(2,'0')}-${new Date(y, m, 0).getDate()}`;
+            applyFilter();
+        }
+
+        function quickFilter(type) {
+            const now = new Date();
+            let start, end;
+            if (type === 'week') {
+                const day = now.getDay() || 7;
+                start = new Date(now);
+                start.setDate(now.getDate() - day + 1);
+                end = new Date(now);
+                end.setDate(start.getDate() + 6);
+            } else if (type === 'year') {
+                start = new Date(now.getFullYear(), 0, 1);
+                end = new Date(now.getFullYear(), 11, 31);
+            }
+            document.getElementById('startDate').value = start.toISOString().split('T')[0];
+            document.getElementById('endDate').value = end.toISOString().split('T')[0];
+            applyFilter();
+        }
+
+        function applyFilter() {
+            currentStart = document.getElementById('startDate').value;
+            currentEnd = document.getElementById('endDate').value;
+            loadData();
+        }
+
+        async function loadData() {
+            const params = new URLSearchParams();
+            if (currentStart) params.append('start', currentStart);
+            if (currentEnd) params.append('end', currentEnd);
+            const res = await fetch('/api/finances?' + params, { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) {
+                renderTable(json.data);
+                loadStats();
+                drawChart(json.data);
+            }
+        }
+
+        function renderTable(data) {
+            const tbody = document.querySelector('#recordTable tbody');
+            tbody.innerHTML = data.map(r => `
+                <tr>
+                    <td>${r.date}</td>
+                    <td>${r.type === 'income' ? '收入' : '支出'}</td>
+                    <td>${r.category}</td>
+                    <td>${r.item}</td>
+                    <td>¥${r.amount}</td>
+                    <td>${r.note}</td>
+                    <td>
+                        <button class="btn-sm" onclick="editRecord(${r.id})">✎</button>
+                        <button class="btn-sm danger" onclick="deleteRecord(${r.id})">✕</button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadStats() {
+            const params = new URLSearchParams();
+            if (currentStart) params.append('start', currentStart);
+            if (currentEnd) params.append('end', currentEnd);
+            const res = await fetch('/api/finances/stats?' + params, { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (json.success) {
+                document.getElementById('statIncome').innerText = json.income;
+                document.getElementById('statExpense').innerText = json.expense;
+                document.getElementById('statBalance').innerText = json.balance;
+            }
+        }
+
+        function drawChart(data) {
+            const ctx = document.getElementById('categoryChart').getContext('2d');
+            const map = {};
+            data.filter(r => r.type === 'expense').forEach(r => {
+                const cat = r.category || '其他';
+                map[cat] = (map[cat] || 0) + parseFloat(r.amount);
+            });
+            if (window.myPie) window.myPie.destroy();
+            window.myPie = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(map),
+                    datasets: [{
+                        data: Object.values(map),
+                        backgroundColor: ['#FF6384','#36A2EB','#FFCE56','#4BC0C0','#9966FF','#FF9F40']
+                    }]
+                },
+                options: { responsive: true }
+            });
+        }
+
+        function showAddDialog() {
+            document.getElementById('financeModalTitle').innerText = '添加记录';
+            document.getElementById('editId').value = '';
+            document.getElementById('fType').value = 'expense';
+            document.getElementById('fItem').value = '';
+            document.getElementById('fAmount').value = '';
+            document.getElementById('fDate').value = new Date().toISOString().split('T')[0];
+            document.getElementById('fNote').value = '';
+            refreshCategorySelect();
+            document.getElementById('financeModal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('financeModal').style.display = 'none';
+        }
+
+        async function editRecord(id) {
+            const res = await fetch('/api/finances?start=&end=', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            const record = json.data.find(r => r.id == id);
+            if (record) {
+                document.getElementById('financeModalTitle').innerText = '编辑记录';
+                document.getElementById('editId').value = id;
+                document.getElementById('fType').value = record.type;
+                document.getElementById('fItem').value = record.item;
+                document.getElementById('fAmount').value = record.amount;
+                document.getElementById('fDate').value = record.date;
+                document.getElementById('fNote').value = record.note;
+                await refreshCategorySelect();
+                document.getElementById('fCategorySelect').value = record.category;
+                document.getElementById('financeModal').style.display = 'flex';
+            }
+        }
+
+        async function saveRecord() {
+            const id = document.getElementById('editId').value;
+            const body = {
+                type: document.getElementById('fType').value,
+                category: document.getElementById('fCategorySelect').value,
+                item: document.getElementById('fItem').value.trim(),
+                amount: parseFloat(document.getElementById('fAmount').value),
+                date: document.getElementById('fDate').value,
+                note: document.getElementById('fNote').value.trim()
+            };
+            if (!body.item || !body.amount) return alert('请填写项目和金额');
+            if (id) body.id = parseInt(id);
+            const url = id ? '/api/finances/update' : '/api/finances';
+            const method = id ? 'PUT' : 'POST';
+            const res = await fetch(url, {
+                method,
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const result = await res.json();
+            if (result.success) { closeModal(); loadData(); }
+            else alert(result.error || '保存失败');
+        }
+
+        async function deleteRecord(id) {
+            if (!confirm('确认删除？')) return;
+            await fetch('/api/finances/delete', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id })
+            });
+            loadData();
+        }
+
+        // ========== 初始化 ==========
+        loadNav().then(async () => {
+            applySpaceBackground();
+            const auth = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+            if (auth.status === 401) { localStorage.clear(); location.href = '/'; return; }
+            await refreshCategorySelect();
+            resetFilter();
+        });
+    </script>
+</body>
+</html>
